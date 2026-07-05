@@ -1,12 +1,17 @@
 let airports = [];      // [{id, name}]
-let flatEdges = [];      // [{from, to, airline, color, freq, aircraft, note}]
-let airportCategories = {}; // id -> Set('international' | 'domestic') across all airlines
+let flatEdges = [];      // [{from, to, airline, type, color, freq, aircraft, note}]
 let globalPaths = [];    // [{nodes:[id,...], edges:[edge,...]}]
 let activeRouteIdx = 0;
 let routeFilter = 'all'; // 'all' | 'international' | 'domestic'
 
 function setRouteFilter(val) {
     routeFilter = val;
+}
+
+// 便（route）の国際線/国内線は from/to それぞれの空港の country から自動判定する。
+// どちらかの空港が国外空港（foreign）なら国際線、両方とも国内空港（domestic）なら国内線。
+function routeType(from, to) {
+    return (airportCountry(from) === "foreign" || airportCountry(to) === "foreign") ? "international" : "domestic";
 }
 
 window.onload = function() {
@@ -16,39 +21,35 @@ window.onload = function() {
 };
 
 function initData() {
-    airports = Object.keys(airportData).map(id => ({ id, name: airportData[id] }));
+    airports = Object.keys(airportData).map(id => ({ id, name: airportName(id) }));
 
     flatEdges = [];
-    airportCategories = {};
-    airports.forEach(a => airportCategories[a.id] = new Set());
-
     for (let airline in airlineData) {
         let info = airlineData[airline];
         info.routes.forEach(r => {
-            let type = r.type || "domestic";
             flatEdges.push({
-                from: r.from, to: r.to, airline: airline, type: type,
+                from: r.from, to: r.to, airline: airline, type: routeType(r.from, r.to),
                 color: info.color, textDark: info.textDark,
                 freq: r.freq, aircraft: r.aircraft, note: r.note
             });
-            airportCategories[r.from].add(type);
-            airportCategories[r.to].add(type);
         });
     }
 }
 
-// 特定の航空会社の就航空港を「国際線就航空港」「国内線就航空港」に分類する
+// 特定の航空会社の就航空港を「国内空港」「国外空港」に分類する（airportData の country で判定）
+// 並び順は airportData の order（コード側で自由に並べ替え可能）に従う
 function groupedAirportsForAirline(airline) {
-    let cat = { international: new Map(), domestic: new Map() };
+    let cat = { domestic: new Map(), foreign: new Map() };
     (airlineData[airline].routes || []).forEach(r => {
-        let type = r.type || "domestic";
         [r.from, r.to].forEach(id => {
             if (!airportData[id]) return;
-            cat[type].set(id, airportData[id]);
+            cat[airportCountry(id)].set(id, airportName(id));
         });
     });
-    let toList = m => [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([id, name]) => ({ id, name }));
-    return { international: toList(cat.international), domestic: toList(cat.domestic) };
+    let toList = m => [...m.entries()]
+        .sort((a, b) => airportOrder(a[0]) - airportOrder(b[0]))
+        .map(([id, name]) => ({ id, name }));
+    return { domestic: toList(cat.domestic), foreign: toList(cat.foreign) };
 }
 
 function populateCompanySelect(pos) {
@@ -79,8 +80,8 @@ function updateAirports(pos) {
         });
         stSelect.appendChild(og);
     };
-    addGroup("国際線", grouped.international);
-    addGroup("国内線", grouped.domestic);
+    addGroup("国内空港", grouped.domestic);
+    addGroup("国外空港", grouped.foreign);
 
     onSelectInput(pos);
 }
@@ -97,12 +98,12 @@ function onTextInput(pos) {
     let lower = val.toLowerCase();
     let matches = airports.filter(a => a.name.includes(val) || a.id.toLowerCase().includes(lower));
 
+    // 拠点空港 → 国内空港 → 国外空港 の順に並べ、同グループ内は airportData の order 順
     let rank = a => {
         if (a.id === primaryAirportId) return 0;
-        let cats = airportCategories[a.id] || new Set();
-        return cats.has("international") ? 1 : 2;
+        return airportCountry(a.id) === "foreign" ? 2 : 1;
     };
-    matches.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'ja'));
+    matches.sort((a, b) => rank(a) - rank(b) || airportOrder(a.id) - airportOrder(b.id));
     matches = matches.slice(0, 15);
 
     state.items = matches; state.hi = -1;
@@ -118,11 +119,10 @@ function renderSuggestions(pos) {
         return;
     }
     listEl.innerHTML = state.items.map((a, i) => {
-        let cats = airportCategories[a.id] || new Set();
         let isHub = a.id === primaryAirportId;
-        let label = isHub ? "拠点" : (cats.has("international") && cats.has("domestic")) ? "国際/国内"
-                    : cats.has("international") ? "国際線" : "国内線";
-        let badgeColor = isHub ? "#e67e22" : cats.has("international") ? "#4a86e8" : "#50a050";
+        let country = airportCountry(a.id);
+        let label = isHub ? "拠点" : (country === "foreign" ? "国外" : "国内");
+        let badgeColor = isHub ? "#e67e22" : (country === "foreign" ? "#4a86e8" : "#50a050");
         return `
         <div class="suggest-item ${i === state.hi ? 'hi' : ''}" data-idx="${i}"
              onmousedown="selectSuggestion('${pos}', ${i})">
@@ -186,7 +186,7 @@ document.addEventListener("click", (evt) => {
 function onSelectInput(pos) {
     let stSelect = document.getElementById(`${pos}St`);
     let id = stSelect.value;
-    document.getElementById(`${pos}Input`).value = id ? `${airportData[id]}` : "";
+    document.getElementById(`${pos}Input`).value = id ? airportName(id) : "";
     document.getElementById(`${pos}Suggest`).style.display = "none";
 }
 
@@ -269,13 +269,13 @@ function renderActiveRoute() {
     path.edges.forEach((edge, idx) => {
         if (idx > 0) {
             let hubId = path.nodes[idx];
-            html += `<div class="transfer-row">🔄 乗り継ぎ（${hubId} : ${airportData[hubId]}）</div>`;
+            html += `<div class="transfer-row">🔄 乗り継ぎ（${hubId} : ${airportName(hubId)}）</div>`;
         }
 
         let depId = path.nodes[idx];
         let arrId = path.nodes[idx + 1];
-        let depName = airportData[depId];
-        let arrName = airportData[arrId];
+        let depName = airportName(depId);
+        let arrName = airportName(arrId);
         let textCol = edge.textDark ? "#333" : "white";
         let typeLabel = edge.type === "international" ? "国際線" : "国内線";
         let typeClass = edge.type === "international" ? "badge-intl" : "badge-dom";
