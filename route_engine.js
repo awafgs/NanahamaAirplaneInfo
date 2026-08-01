@@ -16,8 +16,8 @@ function routeType(from, to) {
 
 window.onload = function() {
     initData();
-    populateCompanySelect('start');
-    populateCompanySelect('goal');
+    populateAirportSelect('start');
+    populateAirportSelect('goal');
 };
 
 function initData() {
@@ -36,52 +36,28 @@ function initData() {
     }
 }
 
-// 特定の航空会社の就航空港を「国内空港」「国外空港」に分類する（airportData の country で判定）
-// 並び順は airportData の order（コード側で自由に並べ替え可能）に従う
-function groupedAirportsForAirline(airline) {
-    let cat = { domestic: new Map(), foreign: new Map() };
-    (airlineData[airline].routes || []).forEach(r => {
-        [r.from, r.to].forEach(id => {
-            if (!airportData[id]) return;
-            cat[airportCountry(id)].set(id, airportName(id));
-        });
-    });
-    let toList = m => [...m.entries()]
-        .sort((a, b) => airportOrder(a[0]) - airportOrder(b[0]))
-        .map(([id, name]) => ({ id, name }));
-    return { domestic: toList(cat.domestic), foreign: toList(cat.foreign) };
-}
-
-function populateCompanySelect(pos) {
-    let compSelect = document.getElementById(`${pos}Comp`);
-    compSelect.innerHTML = "";
-    for (let airline in airlineData) {
-        let opt = document.createElement("option");
-        opt.value = airline; opt.textContent = airline;
-        compSelect.appendChild(opt);
-    }
-    updateAirports(pos);
-}
-
-function updateAirports(pos) {
-    let airline = document.getElementById(`${pos}Comp`).value;
+// 出発・到着とも、航空会社や国内外の区分をまたいだ共通の空港一覧から選択する。
+function populateAirportSelect(pos) {
     let stSelect = document.getElementById(`${pos}St`);
     stSelect.innerHTML = "";
 
-    let grouped = groupedAirportsForAirline(airline);
-    let addGroup = (label, list) => {
-        if (!list.length) return;
-        let og = document.createElement("optgroup");
-        og.label = label;
-        list.forEach(ap => {
+    // 国内空港・国外空港のグループごとに optgroup を分けて表示する
+    let domesticGroup = document.createElement("optgroup");
+    domesticGroup.label = "国内空港";
+    let foreignGroup = document.createElement("optgroup");
+    foreignGroup.label = "国外空港";
+
+    Object.keys(airportData)
+        .sort((a, b) => airportOrder(a) - airportOrder(b) || a.localeCompare(b))
+        .forEach(id => {
             let opt = document.createElement("option");
-            opt.value = ap.id; opt.textContent = `${ap.id} : ${ap.name}`;
-            og.appendChild(opt);
+            opt.value = id;
+            opt.textContent = `${id} : ${airportName(id)}`;
+            (airportCountry(id) === "foreign" ? foreignGroup : domesticGroup).appendChild(opt);
         });
-        stSelect.appendChild(og);
-    };
-    addGroup("国内空港", grouped.domestic);
-    addGroup("国外空港", grouped.foreign);
+
+    if (domesticGroup.children.length) stSelect.appendChild(domesticGroup);
+    if (foreignGroup.children.length) stSelect.appendChild(foreignGroup);
 
     onSelectInput(pos);
 }
@@ -139,14 +115,6 @@ function selectSuggestion(pos, idx) {
     let match = state.items[idx];
     if (!match) return;
 
-    // その空港に就航している航空会社を探して会社セレクトに反映
-    let airline = Object.keys(airlineData).find(al =>
-        airlineData[al].routes.some(r => r.from === match.id || r.to === match.id)
-    );
-    if (airline) {
-        document.getElementById(`${pos}Comp`).value = airline;
-        updateAirports(pos);
-    }
     document.getElementById(`${pos}St`).value = match.id;
     document.getElementById(`${pos}Input`).value = match.name;
 
